@@ -1,0 +1,261 @@
+#include "DHT.h"
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include<ArduinoJson.h>
+
+// Firebase configuration
+#define FIREBASE_API_KEY "AIzaSyCWQRC_EzlR8QdqplL6HZwEfQQKQLG-vqA"
+#define FIREBASE_DATABASE_URL "https://smart-a-416618-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define WIFI_SSID "Ben Dover"
+#define WIFI_PASSWORD "11111111"
+#define FIREBASE_PROJECT_ID "smart-a-416618"
+#define FIREBASE_COLLECTION "potentiometer"
+#define FIREBASE_COLLECTION2 "selectedCrops"
+#define DHT11PIN 27  // DHT
+#define AOUT_PIN 26  // SM
+#define AO_PIN 32    // GS
+#define DO_PIN 35    // RS
+#define LDR_PIN 33   // LDR
+#define PUMP 23
+
+DHT dht(DHT11PIN, DHT11);
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  pinMode(DO_PIN, INPUT);
+  Serial.println("Warming up the MQ2 sensor");
+  pinMode(DO_PIN, INPUT);
+  pinMode(PUMP, OUTPUT);  // Relay
+
+  // Connect to Wi-Fi
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(300);
+  }
+  Serial.println("\nConnected to Wi-Fi");
+}
+
+float getLightPercentage() {
+  int ldrRawVal = analogRead(LDR_PIN);
+  float percentage = ((float)(ldrRawVal * 100) / 4096);
+  // percentage = 100 - percentage;  // Uncomment this line if needed
+  return percentage;
+}
+
+bool isRainDetected() {
+  int rain_state = digitalRead(DO_PIN);
+
+  if (rain_state == LOW)
+    return false;  // Rain is NOT detected
+  else
+    return true;  // Rain is detected
+}
+
+float getMoisturePercentage() {
+  int sensor_analog = analogRead(AOUT_PIN);
+  float moisture_percentage = (100 - ((sensor_analog / 4096.00) * 100));
+  return moisture_percentage;
+}
+
+void loop() {
+   if (WiFi.status() == WL_CONNECTED) {
+    // Send HTTP GET request to Firestore REST API
+    HTTPClient http;
+    String url = "https://firestore.googleapis.com/v1/projects/" + String(FIREBASE_PROJECT_ID) + "/databases/(default)/documents/" + String(FIREBASE_COLLECTION2) + "?key=" + String(FIREBASE_API_KEY);
+    http.begin(url);
+    int httpResponseCode = http.GET();
+
+if (httpResponseCode > 0) {
+  String payload = http.getString();
+  // Serial.println("Raw JSON response:");
+  // Serial.println(payload);
+
+  // Parse JSON response
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, payload);
+
+  if (error) {
+    Serial.print("deserializeJson() failed: ");
+    Serial.println(error.c_str());
+    return;
+  }
+
+  // Check if the document is an array
+  if (!doc.containsKey("documents")) {
+    Serial.println("JSON document does not contain 'documents' key");
+    return;
+  }
+
+  // Get the array of documents
+  JsonArray documents = doc["documents"].as<JsonArray>();
+
+  // Loop through each object in the array
+  for (JsonObject obj : documents) {
+    // Extract temperature value
+    JsonObject fields = obj["fields"];
+    double id = fields["Id"]["doubleValue"];
+    int x = int(id);
+
+    // Print temperature value
+    Serial.print("Id: ");
+    Serial.println(id);
+
+    // // Check if temperature exceeds threshold
+    // if (temperature > TEMPERATURE_THRESHOLD) {
+    //   digitalWrite(LED_PIN, HIGH); // Turn on LED
+    //   Serial.println("LED ON");
+    // } else {
+    //   digitalWrite(LED_PIN, LOW); // Turn off LED
+    //   Serial.println("LED OFF");
+    // }
+  }
+} else {
+  Serial.print("Error fetching data. HTTP response code: ");
+  Serial.println(httpResponseCode);
+}
+  // DHT
+  float humi = dht.readHumidity();
+  float temp = dht.readTemperature();
+  Serial.print("Temperature: ");
+  Serial.print(temp);
+  Serial.print("ºC ");
+  Serial.print("Humidity: ");
+  Serial.println(humi);
+  delay(1000);
+
+  // Moisture Sensor
+  float soilMoisturePer = getMoisturePercentage();
+  Serial.print("Moisture = ");
+  Serial.print(soilMoisturePer);
+  Serial.println("%");
+  delay(250);
+
+  // Gas Sensor
+  int gasValue = analogRead(AO_PIN);
+  Serial.print("MQ2 sensor AO value: ");
+  Serial.println(gasValue);
+
+  // Rain Sensor
+  bool rainDetected = isRainDetected();
+  if (rainDetected)
+    Serial.println("The rain is detected");
+  else
+    Serial.println("The rain is NOT detected");
+
+  // LDR
+  float lightpercent = getLightPercentage();
+  Serial.print("Light = ");
+  Serial.print(lightpercent);
+
+
+
+  Serial.println("%");
+  delay(250);
+
+  // User Input
+  int selectedCase = x;
+  // while (!Serial.available()) {} // Wait for user input
+  // selectedCase = Serial.read();  // Read user input
+
+  // Switch case based on the user-defined case
+  switch (selectedCase) {
+
+    case 1://sugarcane
+      if (soilMoisturePer < 60) {
+        uint32_t currentmillis = millis();
+        while (millis() - currentmillis < 3000) {
+          digitalWrite(PUMP, LOW);
+        }
+      }
+
+      if (rainDetected == true) {
+        digitalWrite(PUMP, HIGH);
+        delay(200);
+      }
+
+      if (humi < 40 && temp > 30) {
+        uint32_t currentmillis = millis();
+        while (millis() - currentmillis < 3000) {
+          digitalWrite(PUMP, LOW);
+          delay(200);
+        }
+      }
+      break;
+
+    case 2://wheat
+      if (soilMoisturePer < 40) {
+        uint32_t currentmillis = millis();
+        while (millis() - currentmillis < 3000) {
+          digitalWrite(PUMP, LOW);
+        }
+      }
+
+      if (rainDetected == true) {
+        digitalWrite(PUMP, HIGH);
+        delay(200);
+      }
+
+      if (humi < 50 && temp > 25) {
+        uint32_t currentmillis = millis();
+        while (millis() - currentmillis < 3000) {
+          digitalWrite(PUMP, LOW);
+          delay(200);
+        }
+      }
+      break;
+    case 3://maize
+      if (soilMoisturePer < 40) {
+        uint32_t currentmillis = millis();
+        while (millis() - currentmillis < 3000) {
+          digitalWrite(PUMP, LOW);
+        }
+      }
+
+      if (rainDetected == true) {
+        digitalWrite(PUMP, HIGH);
+        delay(200);
+      }
+
+      if (humi < 50 && temp > 25) {
+        uint32_t currentmillis = millis();
+        while (millis() - currentmillis < 3000) {
+          digitalWrite(PUMP, LOW);
+          delay(200);
+        }
+      }
+      break;
+    default:
+      Serial.println("Invalid case selected. Please enter a Valid Case.");
+
+
+  // Construct the JSON payload
+  String jsonPayload = "{\"fields\": {\"temperature\": {\"doubleValue\": " + String(temp) + "}, \"humidity\": {\"doubleValue\": " + String(humi) + "}, \"moisture\": {\"doubleValue\": " + String(soilMoisturePer) + "}, \"gasValue\": {\"intValue\": " + String(gasValue) + "}, \"rainDetected\": {\"boolValue\": " + String(rainDetected) + "}, \"lightPercentage\": {\"doubleValue\": " + String(lightpercent) + "}}}";
+
+  Serial.print("Sending JSON payload: ");
+  Serial.println(jsonPayload);
+
+
+  Serial.print("Sending JSON payload: ");
+  Serial.println(jsonPayload);
+
+  // Send HTTP POST request to Firestore REST API
+  HTTPClient http;
+  http.begin("https://firestore.googleapis.com/v1/projects/" + String(FIREBASE_PROJECT_ID) + "/databases/(default)/documents/" + String(FIREBASE_COLLECTION) + "?key=" + String(FIREBASE_API_KEY));
+  http.addHeader("Content-Type", "application/json");
+  int httpResponseCode = http.POST(jsonPayload);
+  
+  if (httpResponseCode > 0) {
+    Serial.print("HTTP POST request sent successfully. Response code: ");
+    Serial.println(httpResponseCode);
+  } else {
+    Serial.print("Error sending HTTP POST request. Response code: ");
+    Serial.println(httpResponseCode);
+  }
+
+  http.end();
+
+  delay(5000); // Delay for 5 seconds before next reading
+}
